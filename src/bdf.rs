@@ -12,7 +12,7 @@ pub fn convert(bdf: &[u8]) -> anyhow::Result<Vec<u8>> {
         .position(|l| l.starts_with("STARTCHAR "))
         .unwrap_or(lines.len());
     let header = Header::from_lines(&lines[..header_size])?;
-    let line_byte_len = header.width / 8;
+    let line_byte_offset = 4 - (header.width / 8);
 
     let mut result = Vec::new();
     for glyph in lines[header_size..].split(|l| *l == "ENDCHAR") {
@@ -29,10 +29,11 @@ pub fn convert(bdf: &[u8]) -> anyhow::Result<Vec<u8>> {
                 continue;
             }
             if found_bitmap {
-                // hex表現の文字列 → 01のビット列
-                let line_bits = u32::from_str_radix(*line, 16).context("hex")?.to_le_bytes();
-                let line_slice = line_bits.get(0..line_byte_len).context("slice")?;
-                result.extend_from_slice(line_slice);
+                // hex表現の文字列 → 0,1のビット列
+                // let line_slice = hex::decode(*line).context("hex")?;
+                let line_bits = u32::from_str_radix(*line, 16).context("hex")?.to_be_bytes();
+                let line_slice = line_bits.get(line_byte_offset..4).context("slice")?;
+                result.extend_from_slice(&line_slice);
             }
         }
     }
