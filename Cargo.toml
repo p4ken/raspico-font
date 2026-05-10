@@ -1,0 +1,5 @@
+[package]
+name = "font"
+edition = "2024"
+
+[dependencies]
