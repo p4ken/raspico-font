@@ -33,6 +33,15 @@ pub fn convert(bdf: &[u8]) -> anyhow::Result<Vec<u8>> {
                 // let line_slice = hex::decode(*line).context("hex")?;
                 let line_bits = u32::from_str_radix(*line, 16).context("hex")?.to_be_bytes();
                 let line_slice = line_bits.get(line_byte_offset..4).context("slice")?;
+
+                #[cfg(debug_assertions)]
+                {
+                    for byte in line_slice {
+                        print!("{:08b}", byte);
+                    }
+                    println!();
+                }
+
                 result.extend_from_slice(&line_slice);
             }
         }
