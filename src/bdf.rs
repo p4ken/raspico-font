@@ -7,47 +7,22 @@ pub fn convert(bdf: &[u8]) -> anyhow::Result<Vec<u8>> {
         .context("utf8")?
         .lines()
         .collect::<Vec<_>>();
-    let header_size = lines
-        .iter()
-        .position(|l| l.starts_with("STARTCHAR "))
-        .unwrap_or(lines.len());
-    let header = Header::from_lines(&lines[..header_size])?;
-    let line_byte_offset = 4 - (header.width / 8);
+    anyhow::ensure!(lines.first().is_some_and(|l| l.starts_with("STARTFONT ")));
 
-    let mut result = Vec::new();
-    for glyph in lines[header_size..].split(|l| *l == "ENDCHAR") {
-        // 例：「次」
-        // ENCODING 27425 (0x6b21)
-        if !glyph.contains(&"ENCODING 27425") {
-            continue;
-        }
+    let mut split_lines = lines
+        .strip_suffix(&["ENDFONT"])
+        .context("no ENDFONT")?
+        .splitn(2, |l| l.starts_with("CHARS "));
+    let header = Header::from_lines(split_lines.next().unwrap())?;
+    let chars_lines = split_lines.next().context("no CHARS")?;
 
-        let mut found_bitmap = false;
-        for line in glyph {
-            if *line == "BITMAP" {
-                found_bitmap = true;
-                continue;
-            }
-            if found_bitmap {
-                // hex表現の文字列 → 0,1のビット列
-                // let line_slice = hex::decode(*line).context("hex")?;
-                let line_bits = u32::from_str_radix(*line, 16).context("hex")?.to_be_bytes();
-                let line_slice = line_bits.get(line_byte_offset..4).context("slice")?;
-
-                #[cfg(debug_assertions)]
-                {
-                    for byte in line_slice {
-                        print!("{:08b}", byte);
-                    }
-                    println!();
-                }
-
-                result.extend_from_slice(&line_slice);
-            }
-        }
+    let mut artifact = Vec::new();
+    for glyph_lines in chars_lines.split_inclusive(|l| *l == "ENDCHAR") {
+        let glyph = Glyph::from_lines(glyph_lines, &header).context(glyph_lines.join("\n"))?;
+        artifact.extend(glyph.bitmap);
     }
 
-    Ok(result)
+    Ok(artifact)
 }
 
 struct Header {
@@ -57,16 +32,64 @@ struct Header {
 
 impl Header {
     fn from_lines(lines: &[&str]) -> anyhow::Result<Self> {
-        let mut font_bounding_box = lines
+        let mut bbox = lines
             .iter()
             .filter_map(|l| l.strip_prefix("FONTBOUNDINGBOX "))
             .next()
             .context("FONTBOUNDINGBOX")?
             .split_whitespace();
 
-        let width = font_bounding_box.next().context("width")?.parse()?;
-        let height = font_bounding_box.next().context("height")?.parse()?;
+        let width = bbox.next().context("width")?.parse()?;
+        let height = bbox.next().context("height")?.parse()?;
 
         Ok(Header { width, height })
+    }
+}
+
+#[derive(Default)]
+struct Glyph {
+    encoding: u16,
+    bitmap: Vec<u8>,
+}
+
+impl Glyph {
+    fn from_lines(lines: &[&str], header: &Header) -> anyhow::Result<Self> {
+        anyhow::ensure!(lines.first().is_some_and(|l| l.starts_with("STARTCHAR ")));
+        let lines = lines.strip_suffix(&["ENDCHAR"]).context("no ENDCHAR")?;
+        let mut split_lines = lines.splitn(2, |l| *l == "BITMAP");
+        let meta_lines = split_lines.next().unwrap();
+        let bitmap_lines = split_lines.next().context("no BITMAP")?;
+        let encoding = meta_lines
+            .iter()
+            .find_map(|l| l.strip_prefix("ENCODING "))
+            .context("no ENCODING")?
+            .parse::<u16>()
+            .context("ENCODING value")?;
+
+        // 例：「次」
+        // ENCODING 27425 (0x6b21) = UTF-16
+        if encoding != 27425 {
+            return Ok(Glyph::default());
+        }
+
+        let line_byte_offset = 4 - (header.width / 8);
+        let mut bitmap = Vec::new();
+        for line in bitmap_lines {
+            // hex表現の文字列 → 0,1のビット列
+            let line_bytes = u32::from_str_radix(*line, 16).context("hex")?.to_be_bytes();
+            let line_slice = line_bytes.get(line_byte_offset..4).context("slice")?;
+
+            #[cfg(debug_assertions)]
+            {
+                for byte in line_slice {
+                    print!("{:08b}", byte);
+                }
+                println!();
+            }
+
+            bitmap.extend_from_slice(&line_slice);
+        }
+
+        Ok(Glyph { encoding, bitmap })
     }
 }
