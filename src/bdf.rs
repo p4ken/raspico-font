@@ -3,7 +3,10 @@ use anyhow::Context;
 // bdf_reader はMSX_FONTで様々なエラーが出て手に負えなかったので、手実装。
 // 例えば METRICSSET 2 がエラーを出す。
 pub fn convert(bdf: &[u8]) -> anyhow::Result<Vec<u8>> {
-    Font::from_bdf(bdf).context("parse")?.to_p4()
+    Font::from_bdf(bdf)
+        .context("parse")?
+        .to_pico()
+        .context("serialize")
 }
 
 struct Font {
@@ -35,15 +38,33 @@ impl Font {
         Ok(Self { header, glyphs })
     }
 
-    fn to_p4(&self) -> anyhow::Result<Vec<u8>> {
-        let mut out = Vec::new();
+    fn to_pico(self) -> anyhow::Result<Vec<u8>> {
+        let mut bin = Vec::new();
+        bin.extend(self.glyphs.len().to_le_bytes());
         for glyph in &self.glyphs {
-            out.extend(glyph.to_p4(&self.header)?);
+            let unicode_bin = glyph.encoding.to_le_bytes();
+            bin.extend(unicode_bin);
         }
-        Ok(out)
+        for glyph in &self.glyphs {
+            let glyph_bin = glyph.bitmap.fill_square(&self.header)?;
+            // 例：「次」
+            // ENCODING 27425 (0x6b21) = UTF-16
+            #[cfg(debug_assertions)]
+            if glyph.encoding == 27425 {
+                for row_bin in glyph_bin.chunks(self.header.width / 8) {
+                    for row_byte in row_bin {
+                        print!("{:08b}", row_byte);
+                    }
+                    println!();
+                }
+            }
+            bin.extend(glyph_bin);
+        }
+        Ok(bin)
     }
 }
 
+#[derive(Debug)]
 struct Header {
     width: usize,
     height: usize,
@@ -68,7 +89,7 @@ impl Header {
 #[derive(Default)]
 struct Glyph {
     encoding: u16,
-    bitmap: Vec<[u8; 4]>,
+    bitmap: Bitmap,
 }
 
 impl Glyph {
@@ -85,36 +106,34 @@ impl Glyph {
             .parse::<u16>()
             .context("ENCODING value")?;
 
-        // 例：「次」
-        // ENCODING 27425 (0x6b21) = UTF-16
-        if encoding != 27425 {
-            return Ok(Glyph::default());
-        }
+        let bitmap = Bitmap::from_lines(bitmap_lines).context("bitmap")?;
 
-        let mut bitmap = Vec::new();
-        for line in bitmap_lines {
+        Ok(Self { encoding, bitmap })
+    }
+}
+
+#[derive(Debug, Default)]
+struct Bitmap {
+    rows: Vec<[u8; 4]>,
+}
+
+impl Bitmap {
+    fn from_lines(lines: &[&str]) -> anyhow::Result<Self> {
+        let mut rows = Vec::new();
+        for l in lines {
             // hex表現の文字列 → 0,1のビット列
-            bitmap.push(u32::from_str_radix(*line, 16).context("hex")?.to_be_bytes());
+            let line_bytes = u32::from_str_radix(*l, 16).context("hex")?.to_be_bytes();
+            rows.push(line_bytes);
         }
-
-        Ok(Glyph { encoding, bitmap })
+        Ok(Self { rows })
     }
 
-    fn to_p4(&self, header: &Header) -> anyhow::Result<Vec<u8>> {
+    fn fill_square(&self, header: &Header) -> anyhow::Result<Vec<u8>> {
         let mut out = Vec::new();
         let line_byte_offset = 4 - (header.width / 8);
-        for line_bytes in &self.bitmap {
+        for line_bytes in &self.rows {
             let line_slice = line_bytes.get(line_byte_offset..4).context("slice")?;
-
-            #[cfg(debug_assertions)]
-            {
-                for byte in line_slice {
-                    print!("{:08b}", byte);
-                }
-                println!();
-            }
-
-            out.extend_from_slice(&line_slice);
+            out.extend_from_slice(line_slice);
         }
         Ok(out)
     }
