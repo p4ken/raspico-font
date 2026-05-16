@@ -46,7 +46,11 @@ impl Font {
             bin.extend(unicode_bin);
         }
         for glyph in &self.glyphs {
-            let glyph_bin = glyph.bitmap.fill_square(&self.header)?;
+            let glyph_bin = glyph
+                .bitmap
+                .fill_square(&self.header)
+                .context("fill square")?;
+
             // 例：「次」
             // ENCODING 27425 (0x6b21) = UTF-16
             #[cfg(debug_assertions)]
@@ -58,6 +62,7 @@ impl Font {
                     println!();
                 }
             }
+
             bin.extend(glyph_bin);
         }
         Ok(bin)
@@ -132,8 +137,7 @@ impl Bitmap {
         let mut out = Vec::new();
         let line_byte_offset = 4 - (header.width / 8);
         for line_bytes in &self.rows {
-            let line_slice = line_bytes.get(line_byte_offset..4).context("slice")?;
-            out.extend_from_slice(line_slice);
+            out.extend(&line_bytes[line_byte_offset..4]);
         }
         Ok(out)
     }
